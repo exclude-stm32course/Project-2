@@ -76,6 +76,14 @@ static void updateLedPwm(uint32_t val)
 static void updateTemp(uint32_t val)
 {
 	/* Do conversion */
+	void *void_val = &val;
+	float *float_val = (float*)void_val;
+	/* 5.3.19
+	 * Ref: https://www.st.com/content/ccc/resource/technical/document/datasheet/33/d4/6f/1d/df/0b/4c/6d/CD00161566.pdf/files/CD00161566.pdf/jcr:content/translations/en.CD00161566.pdf
+	 *
+	 * 11.10
+	 * Ref: https://www.st.com/content/ccc/resource/technical/document/reference_manual/59/b9/ba/7f/11/af/43/d5/CD00171190.pdf/files/CD00171190.pdf/jcr:content/translations/en.CD00171190.pdf
+	 */
 
 }
 
