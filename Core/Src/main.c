@@ -19,6 +19,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include <string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -62,6 +63,9 @@ struct channel_val {
 	  uint32_t val;
 	  enum channel channel;
 };
+
+
+TIM_OC_InitTypeDef PWMConfig;
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -154,7 +158,11 @@ int main(void)
   };
   int sz = sizeof(channels) / sizeof(channels[0]);
 
-  /* get first channel*/
+
+  PWMConfig.Pulse = 35; /* fix this */
+  HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_2);
+  HAL_TIM_PWM_ConfigChannel(&htim1, &PWMConfig, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -330,6 +338,7 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM1_Init 2 */
+  memcpy(&PWMConfig, &sConfigOC, sizeof(PWMConfig));
 
   /* USER CODE END TIM1_Init 2 */
   HAL_TIM_MspPostInit(&htim1);
