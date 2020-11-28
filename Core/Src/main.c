@@ -19,11 +19,109 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-#include <string.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#define ARCH64 8
+#define ARCH32 4
+#define ARCH16 2
+#define ARCH8  1
 
+int copy_data8(void *to, const void *from, int *sz)
+{
+	uint64_t *to_d = to;
+	const uint64_t *from_d = from;
+	int ret = 0;
+	while(*sz > 0 && *sz - ARCH64 >= 0) {
+		*to_d = *from_d;
+		++to_d;
+		++from_d;
+		*sz -= ARCH64;
+		ret += ARCH64;
+	}
+	return ret;
+}
+
+int copy_data4(void *to, const void *from, int *sz)
+{
+	uint32_t *to_d = to;
+	const uint32_t *from_d = from;
+	int ret = 0;
+
+	while(*sz > 0 && *sz - ARCH32 >= 0) {
+		*to_d = *from_d;
+		++to_d;
+		++from_d;
+		*sz -= ARCH32;
+		ret += ARCH32;
+	}
+	return ret;
+}
+
+int copy_data2(void *to, const void *from, int *sz)
+{
+	uint16_t *to_d = to;
+	const uint16_t *from_d = from;
+	int ret = 0;
+
+	while(*sz > 0 && *sz - ARCH16 >= 0) {
+		*to_d = *from_d;
+		++to_d;
+		++from_d;
+		*sz -= ARCH16;
+		ret += ARCH16;
+	}
+	return ret;
+}
+
+int copy_data1(void *to, const void *from, int *sz)
+{
+	uint8_t *to_d = to;
+	const uint8_t *from_d = from;
+	int ret = 0;
+
+	while(*sz > 0 && *sz - ARCH8 >= 0) {
+		*to_d = *from_d;
+		++to_d;
+		++from_d;
+		*sz -= ARCH8;
+		ret += ARCH8;
+	}
+	return ret;
+}
+
+void copy_data(void *to, const void *from, int sz){
+	uint8_t *to_d = to;
+	const uint8_t *from_d = from;
+	int arch_sz = sizeof(void*);
+	int ret;
+
+	switch(arch_sz) {
+	case ARCH64:
+		ret = copy_data8(to_d, from_d, &sz);
+		if(sz == 0) return;
+		to_d += ret;
+		from_d += ret;
+		/* FALLTHROUGH */
+	case ARCH32:
+		ret = copy_data4(to_d, from_d, &sz);
+		if(sz == 0) return;
+		to_d += ret;
+		from_d += ret;
+		/* FALLTHROUGH */
+	case ARCH16:
+		ret = copy_data2(to_d, from_d, &sz);
+		if(sz == 0) return;
+		to_d += ret;
+		from_d += ret;
+		/* FALLTHROUGH */
+	case ARCH8:
+		/* FALLTHROUGH */
+	default:
+		ret = copy_data1(to_d, from_d, &sz);
+		if(sz == 0) return;
+	}
+}
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -338,7 +436,7 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM1_Init 2 */
-  memcpy(&PWMConfig, &sConfigOC, sizeof(PWMConfig));
+  copy_data(&PWMConfig, &sConfigOC, sizeof(PWMConfig));
 
   /* USER CODE END TIM1_Init 2 */
   HAL_TIM_MspPostInit(&htim1);
