@@ -92,6 +92,20 @@ static void SetPWMOutput(struct channel_val *channel)
 	default:break;
 	}
 }
+
+static void retrieve_adc(struct channel_val *channels, int sz)
+{
+	  struct channel_val *channel_ptr = channels;
+	  HAL_ADC_Start(&hadc1);
+	  for(int i = 0 ; i < sz ; ++i) {
+		  HAL_ADC_PollForConversion(&hadc1, 1000); /* 1s */
+		  channel_ptr->val = HAL_ADC_GetValue(&hadc1);
+		  SetPWMOutput(channel_ptr);
+		  channel_ptr++;
+	  }
+	  HAL_ADC_Stop(&hadc1);
+
+}
 /* USER CODE END 0 */
 
 /**
@@ -142,15 +156,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  struct channel_val *channel_ptr = channels;
-	  HAL_ADC_Start(&hadc1);
-	  for(int i = 0 ; i < sz ; ++i) {
-		  HAL_ADC_PollForConversion(&hadc1, 1000); /* 1s */
-		  channel_ptr->val = HAL_ADC_GetValue(&hadc1);
-		  SetPWMOutput(channel_ptr);
-		  channel_ptr++;
-	  }
-	  HAL_ADC_Stop(&hadc1);
+	  retrieve_adc(channels, sz);
 
 	  HAL_Delay(1000); /* 1s */
   }
