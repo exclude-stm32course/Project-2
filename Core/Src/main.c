@@ -22,106 +22,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#define ARCH64 8
-#define ARCH32 4
-#define ARCH16 2
-#define ARCH8  1
 
-int copy_data8(void *to, const void *from, int *sz)
-{
-	uint64_t *to_d = to;
-	const uint64_t *from_d = from;
-	int ret = 0;
-	while(*sz > 0 && *sz - ARCH64 >= 0) {
-		*to_d = *from_d;
-		++to_d;
-		++from_d;
-		*sz -= ARCH64;
-		ret += ARCH64;
-	}
-	return ret;
-}
-
-int copy_data4(void *to, const void *from, int *sz)
-{
-	uint32_t *to_d = to;
-	const uint32_t *from_d = from;
-	int ret = 0;
-
-	while(*sz > 0 && *sz - ARCH32 >= 0) {
-		*to_d = *from_d;
-		++to_d;
-		++from_d;
-		*sz -= ARCH32;
-		ret += ARCH32;
-	}
-	return ret;
-}
-
-int copy_data2(void *to, const void *from, int *sz)
-{
-	uint16_t *to_d = to;
-	const uint16_t *from_d = from;
-	int ret = 0;
-
-	while(*sz > 0 && *sz - ARCH16 >= 0) {
-		*to_d = *from_d;
-		++to_d;
-		++from_d;
-		*sz -= ARCH16;
-		ret += ARCH16;
-	}
-	return ret;
-}
-
-int copy_data1(void *to, const void *from, int *sz)
-{
-	uint8_t *to_d = to;
-	const uint8_t *from_d = from;
-	int ret = 0;
-
-	while(*sz > 0 && *sz - ARCH8 >= 0) {
-		*to_d = *from_d;
-		++to_d;
-		++from_d;
-		*sz -= ARCH8;
-		ret += ARCH8;
-	}
-	return ret;
-}
-
-void copy_data(void *to, const void *from, int sz){
-	uint8_t *to_d = to;
-	const uint8_t *from_d = from;
-	int arch_sz = sizeof(void*);
-	int ret;
-
-	switch(arch_sz) {
-	case ARCH64:
-		ret = copy_data8(to_d, from_d, &sz);
-		if(sz == 0) return;
-		to_d += ret;
-		from_d += ret;
-		/* FALLTHROUGH */
-	case ARCH32:
-		ret = copy_data4(to_d, from_d, &sz);
-		if(sz == 0) return;
-		to_d += ret;
-		from_d += ret;
-		/* FALLTHROUGH */
-	case ARCH16:
-		ret = copy_data2(to_d, from_d, &sz);
-		if(sz == 0) return;
-		to_d += ret;
-		from_d += ret;
-		/* FALLTHROUGH */
-	case ARCH8:
-		/* FALLTHROUGH */
-	default:
-		ret = copy_data1(to_d, from_d, &sz);
-		if(sz == 0) return;
-	}
-}
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -140,8 +41,7 @@ void copy_data(void *to, const void *from, int sz){
 
 /* Private variables ---------------------------------------------------------*/
 ADC_HandleTypeDef hadc1;
-
-TIM_HandleTypeDef htim1;
+DMA_HandleTypeDef hdma_adc1;
 
 /* USER CODE BEGIN PV */
 
@@ -150,72 +50,28 @@ TIM_HandleTypeDef htim1;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
-static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
-enum channel {
-	  channel_pot,
-	  channel_temp,
-};
-struct channel_val {
-	  uint32_t val;
-	  enum channel channel;
-};
 
-
-TIM_OC_InitTypeDef PWMConfig;
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#define ADC_BITS (1 << 12)
+#define VCC 3.3f
+#define BITS_PER_VOLT (ADC_BITS/VCC)
+#define V25 (1.36f*BITS_PER_VOLT)  /* 1.43 from datasheet */
+#define AVG_SLOPE 4.3f /* from datasheet */
+#define CALC_TEMP(x) (((V25-x)/AVG_SLOPE) + 25)
 
-static void updateLedPwm(uint32_t val)
-{
-	/* Convert and update pwm */
-	(void)val;
-}
+#define ADC_READS 2
+uint32_t adc_val[ADC_READS];
 
-static void updateTemp(uint32_t val)
-{
-	/* Do conversion */
-	void *void_val = &val;
-	float *float_val = (float*)void_val;
-	/* 5.3.19
-	 * Ref: https://www.st.com/content/ccc/resource/technical/document/datasheet/33/d4/6f/1d/df/0b/4c/6d/CD00161566.pdf/files/CD00161566.pdf/jcr:content/translations/en.CD00161566.pdf
-	 *
-	 * 11.10
-	 * Ref: https://www.st.com/content/ccc/resource/technical/document/reference_manual/59/b9/ba/7f/11/af/43/d5/CD00171190.pdf/files/CD00171190.pdf/jcr:content/translations/en.CD00171190.pdf
-	 */
+#define temp_elements 1000
 
-}
-
-static void SetPWMOutput(struct channel_val *channel)
-{
-	switch(channel->channel){
-	case channel_pot:
-		// Here we update the pwm
-		updateLedPwm(channel->val);
-		break;
-	case channel_temp:
-		updateTemp(channel->val);
-		break;
-	default:break;
-	}
-}
-
-static void retrieve_adc(struct channel_val *channels, int sz)
-{
-	  struct channel_val *channel_ptr = channels;
-	  HAL_ADC_Start(&hadc1);
-	  for(int i = 0 ; i < sz ; ++i) {
-		  HAL_ADC_PollForConversion(&hadc1, 1000); /* 1s */
-		  channel_ptr->val = HAL_ADC_GetValue(&hadc1);
-		  SetPWMOutput(channel_ptr);
-		  channel_ptr++;
-	  }
-	  HAL_ADC_Stop(&hadc1);
-
-}
+int dma = 0;
+//Temperature (in °C) = {(V25 - VSENSE) / Avg_Slope} + 25
 /* USER CODE END 0 */
 
 /**
@@ -246,33 +102,52 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_ADC1_Init();
-  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
 
-  struct channel_val channels[] = {
-		  {.val = 0, .channel = channel_pot},
-		  {.val = 0, .channel = channel_temp}
-  };
-  int sz = sizeof(channels) / sizeof(channels[0]);
-
-
-  PWMConfig.Pulse = 35; /* fix this */
-  HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_2);
-  HAL_TIM_PWM_ConfigChannel(&htim1, &PWMConfig, TIM_CHANNEL_2);
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
+  HAL_ADC_Start_DMA(&hadc1, adc_val, ADC_READS);
+  float temp;
+  float temp_array[temp_elements];
+  float calc_temp;
+  int current_pos = 0;
   while (1)
   {
+
+	  if(dma) {
+		  temp = CALC_TEMP(adc_val[0]);
+		  dma = 0;
+		  HAL_Delay(5);
+		  HAL_ADC_Start_DMA(&hadc1, adc_val, ADC_READS);
+
+		  if(current_pos < temp_elements) {
+			  temp_array[current_pos] = temp;
+			  current_pos++;
+			  continue;
+		  }
+
+		  current_pos = 0;
+		  for(int i = 0 ; i < temp_elements; ++i) {
+			  calc_temp += temp_array[current_pos];
+		  }
+		  calc_temp /= temp_elements;
+		  temp = calc_temp;
+	  }
+
+	  /* Ordinary ADC check */
+//	  HAL_ADC_Start(&hadc1);
+//	  HAL_ADC_PollForConversion(&hadc1, 30);
+//	  uint32_t val = HAL_ADC_GetValue(&hadc1);
+//	  HAL_ADC_Stop(&hadc1);
+//	  temp = CALC_TEMP(val);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  retrieve_adc(channels, sz);
-
-	  HAL_Delay(1000); /* 1s */
   }
   /* USER CODE END 3 */
 }
@@ -296,7 +171,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL8;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL9;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -315,7 +190,7 @@ void SystemClock_Config(void)
     Error_Handler();
   }
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_ADC;
-  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV8;
+  PeriphClkInit.AdcClockSelection = RCC_ADCPCLK2_DIV6;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -342,12 +217,12 @@ static void MX_ADC1_Init(void)
   /** Common config
   */
   hadc1.Instance = ADC1;
-  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.ScanConvMode = ADC_SCAN_ENABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
   hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
-  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.NbrOfConversion = 2;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -356,7 +231,16 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_TEMPSENSOR;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_71CYCLES_5;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_VREFINT;
+  sConfig.Rank = ADC_REGULAR_RANK_2;
+  sConfig.SamplingTime = ADC_SAMPLETIME_28CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -368,78 +252,18 @@ static void MX_ADC1_Init(void)
 }
 
 /**
-  * @brief TIM1 Initialization Function
-  * @param None
-  * @retval None
+  * Enable DMA controller clock
   */
-static void MX_TIM1_Init(void)
+static void MX_DMA_Init(void)
 {
 
-  /* USER CODE BEGIN TIM1_Init 0 */
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
 
-  /* USER CODE END TIM1_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_OC_InitTypeDef sConfigOC = {0};
-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
-
-  /* USER CODE BEGIN TIM1_Init 1 */
-
-  /* USER CODE END TIM1_Init 1 */
-  htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 0;
-  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
-  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 0;
-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM1_Init 2 */
-  copy_data(&PWMConfig, &sConfigOC, sizeof(PWMConfig));
-
-  /* USER CODE END TIM1_Init 2 */
-  HAL_TIM_MspPostInit(&htim1);
+  /* DMA interrupt init */
+  /* DMA1_Channel1_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
 
 }
 
@@ -458,7 +282,12 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
+{
+	if(hadc != &hadc1) return;
 
+	dma = 1;
+}
 /* USER CODE END 4 */
 
 /**
