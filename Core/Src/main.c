@@ -43,6 +43,9 @@
 ADC_HandleTypeDef hadc1;
 DMA_HandleTypeDef hdma_adc1;
 
+TIM_HandleTypeDef htim1;
+TIM_HandleTypeDef htim2;
+
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -52,26 +55,111 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_TIM1_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define ADC_BITS (1 << 12)
+TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+TIM_MasterConfigTypeDef sMasterConfig = {0};
+TIM_OC_InitTypeDef sConfigOC = {0};
+TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
+
+
+/* TEMPERATURE */
+#define ADC_BITS (1 << 12) /* 12 bit adc = 4096 */
 #define VCC 3.3f
 #define BITS_PER_VOLT (ADC_BITS/VCC)
-#define V25 (1.36f*BITS_PER_VOLT)  /* 1.43 from datasheet */
+#define V25 (1.43f*BITS_PER_VOLT)  /* 1.43 from datasheet */
 #define AVG_SLOPE 4.3f /* from datasheet */
-#define CALC_TEMP(x) (((V25-x)/AVG_SLOPE) + 25)
+#define CALC_TEMP(x) (((V25-x)/AVG_SLOPE) + 25) /* from reference manual */
+//Temperature (in °C) = {(V25 - VSENSE) / Avg_Slope} + 25
 
+/* ADC - DMA */
 #define ADC_READS 2
 uint32_t adc_val[ADC_READS];
-
-#define temp_elements 1000
-
 int dma = 0;
-//Temperature (in °C) = {(V25 - VSENSE) / Avg_Slope} + 25
+
+/* POT */
+#define POT_VAL_DIFF 2
+
+/*
+ * ARR = Period
+ * RCR = 0
+ * formula is: F_tim = Tim_clock / ((PSC+1)(ARR+1)(RCR+1))
+ */
+
+/* This function will set the period and the prescaler to the correct values. */
+static void calc_prescaler(TIM_HandleTypeDef *timer, float freq, int period)
+{
+	float denominator = freq*period;
+	float prescaler = SystemCoreClock/denominator;
+	timer->Init.Prescaler = (uint32_t)(prescaler - 1);
+	timer->Init.Period = (uint32_t)(period - 1);
+}
+
+static void update_pwm(uint32_t val)
+{
+	  HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
+	  sConfigOC.Pulse = val;
+
+	  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+	  {
+	    Error_Handler();
+	  }
+	  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+}
+
+int startTimer = 0;
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)
+{
+	startTimer = 1;
+}
+
+static void restart_timer()
+{
+	  HAL_StatusTypeDef status  = HAL_TIM_Base_Stop_IT(&htim2);
+	  if(HAL_OK == HAL_TIM_Base_Start_IT(&htim2))
+		  startTimer = 0;
+}
+
+static void read_adc()
+{
+	static int last_pot_val = 0;
+	int temp_pot_val;
+	float temp;
+	uint16_t pot_val;
+
+	temp = CALC_TEMP(adc_val[0]);
+
+	pot_val = adc_val[1] / 40;
+
+	temp_pot_val = pot_val - last_pot_val;
+	if(temp_pot_val < 0) temp_pot_val *= -1;
+
+	if(temp_pot_val > POT_VAL_DIFF) {
+		update_pwm(pot_val);
+		last_pot_val = pot_val;
+	}
+
+	dma = 0;
+}
+
+static void timer_set_delay(TIM_HandleTypeDef *htim, float freq, int period)
+{
+	  calc_prescaler(htim, freq, period);
+	  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+	  {
+	    Error_Handler();
+	  }
+	  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+	  {
+	    Error_Handler();
+	  }
+}
 /* USER CODE END 0 */
 
 /**
@@ -104,47 +192,43 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_ADC1_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  HAL_StatusTypeDef status;
 
-  HAL_ADC_Start_DMA(&hadc1, adc_val, ADC_READS);
-  float temp;
-  float temp_array[temp_elements];
-  float calc_temp;
-  int current_pos = 0;
+  status = HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+
+  status = HAL_ADC_Start_DMA(&hadc1, adc_val, ADC_READS);
+
+  /* The interrupt flag is not initially cleared, do that manually */
+  __HAL_TIM_CLEAR_FLAG(&htim2, TIM_SR_UIF); /*!<Update interrupt Flag */
+  status = HAL_TIM_Base_Start_IT(&htim2);
+
+
+
+  float freq = 1;
+  int period = 65535;
+  timer_set_delay(&htim2, freq, period);
+
   while (1)
   {
+	  if(startTimer) {
+		  freq /= 2;
+		  timer_set_delay(&htim2, freq, period);
+		  restart_timer();
 
-	  if(dma) {
-		  temp = CALC_TEMP(adc_val[0]);
-		  dma = 0;
-		  HAL_Delay(5);
-		  HAL_ADC_Start_DMA(&hadc1, adc_val, ADC_READS);
-
-		  if(current_pos < temp_elements) {
-			  temp_array[current_pos] = temp;
-			  current_pos++;
-			  continue;
-		  }
-
-		  current_pos = 0;
-		  for(int i = 0 ; i < temp_elements; ++i) {
-			  calc_temp += temp_array[current_pos];
-		  }
-		  calc_temp /= temp_elements;
-		  temp = calc_temp;
 	  }
 
-	  /* Ordinary ADC check */
-//	  HAL_ADC_Start(&hadc1);
-//	  HAL_ADC_PollForConversion(&hadc1, 30);
-//	  uint32_t val = HAL_ADC_GetValue(&hadc1);
-//	  HAL_ADC_Stop(&hadc1);
-//	  temp = CALC_TEMP(val);
+	  if(dma) {
+		  read_adc();
+		  HAL_ADC_Start_DMA(&hadc1, adc_val, ADC_READS);
+	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -231,16 +315,16 @@ static void MX_ADC1_Init(void)
   */
   sConfig.Channel = ADC_CHANNEL_TEMPSENSOR;
   sConfig.Rank = ADC_REGULAR_RANK_1;
-  sConfig.SamplingTime = ADC_SAMPLETIME_71CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_239CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
   /** Configure Regular Channel
   */
-  sConfig.Channel = ADC_CHANNEL_VREFINT;
+  sConfig.Channel = ADC_CHANNEL_3;
   sConfig.Rank = ADC_REGULAR_RANK_2;
-  sConfig.SamplingTime = ADC_SAMPLETIME_28CYCLES_5;
+  sConfig.SamplingTime = ADC_SAMPLETIME_71CYCLES_5;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
   {
     Error_Handler();
@@ -248,6 +332,132 @@ static void MX_ADC1_Init(void)
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */
+
+}
+
+/**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+	calc_prescaler(&htim1, 30000, 100);
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 0;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 100;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0xffff;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+//  sConfigOC.Pulse = 100;
+
+  /* USER CODE END TIM1_Init 2 */
+  HAL_TIM_MspPostInit(&htim1);
+
+}
+
+/**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+  calc_prescaler(&htim1, 0.1, 65534);
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 4000;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_DOWN;
+  htim2.Init.Period = 65535;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_OnePulse_Init(&htim2, TIM_OPMODE_SINGLE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
 
 }
 
